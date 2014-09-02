@@ -4,8 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+)
+
+var (
+	client = &http.Client{}
 )
 
 // A Rackspace account that is the minimum requirement to
@@ -98,8 +103,9 @@ func (i *Identity) Authenticate() error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
-	// Decode the response json.
+	// Decode the json response.
 	var a IdentityData
 	dec := json.NewDecoder(resp.Body)
 	for {
@@ -109,8 +115,88 @@ func (i *Identity) Authenticate() error {
 			return err
 		}
 	}
-	resp.Body.Close()
 	i.Access = a.Access
+
+	return nil
+}
+
+// A Rackspace container.
+type Container struct {
+	Name         string `json:"name"`
+	Count        int64  `json:"count"`
+	Bytes        int64  `json:"bytes"`
+	Uri          string `json:"cdn_uri"`
+	StreamingUri string `json:"cdn_streaming_uri"`
+	IosUri       string `json:"cdn_ios_uri"`
+	SslUri       string `json:"cdn_ssl_uri"`
+	Enabled      bool   `json:"cdn_enabled"`
+	Ttl          int64  `json:"ttl"`
+	LogRetention bool   `json:"log_retention"`
+}
+
+// Get a list of all containers.
+func AllContainers(endpoint, authToken string) (*[]Container, error) {
+	var containers *[]Container
+
+	req, err := http.NewRequest("GET", endpoint+"?format=json", nil)
+	if err != nil {
+		return containers, err
+	}
+	req.Header.Add("X-Auth-Token", authToken)
+	req.Header.Add("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return containers, err
+	}
+	defer resp.Body.Close()
+
+	// Decode the json response.
+	dec := json.NewDecoder(resp.Body)
+	for {
+		if err := dec.Decode(&containers); err == io.EOF {
+			break
+		} else if err != nil {
+			return containers, err
+		}
+	}
+
+	return containers, nil
+}
+
+// Check for the existence of a container.
+func ContainerExists(endpoint, authToken, name string) bool {
+	containers, err := AllContainers(endpoint, authToken)
+	if err != nil {
+		log.Printf("Error: ContainerExists: %", err.Error())
+		return false
+	}
+
+	for _, c := range *containers {
+		if c.Name == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Create a new container.
+func CreateContainer(endpoint, authToken, name string) error {
+	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/%s", endpoint, name), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Add("X-Auth-Token", authToken)
+	req.Header.Add("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 && resp.StatusCode != 202 {
+		return fmt.Errorf("Error: cannot create container: %s: %d", name, resp.StatusCode)
+	}
 
 	return nil
 }
